@@ -3,9 +3,15 @@ extends Node3D
 const PLAYER_SCRIPT = preload("res://scripts/player.gd")
 const BOT_SCRIPT = preload("res://scripts/bot.gd")
 const HUD_SCRIPT = preload("res://scripts/hud.gd")
+const SETTINGS_PATH := "user://chickenwar_settings.cfg"
 
 var player = null
 var bots: Array = []
+var bots_spawned := false
+var ally_count := 3
+var enemy_count := 4
+var ai_difficulty := 1
+var settings_path := SETTINGS_PATH
 var hud = null
 var capture_progress := 0.0
 var blue_in_zone := 0
@@ -21,6 +27,13 @@ var test_ads := false
 var test_fire := false
 var test_reload := false
 var input_debug := false
+var ai_diag := false
+var menu_test := false
+var override_allies := -1
+var override_enemies := -1
+var override_difficulty := -1
+var diag_timer := 0.0
+var diag_elapsed := 0.0
 var debug_timer := 0.0
 var screenshot_path := ""
 var rng := RandomNumberGenerator.new()
@@ -35,22 +48,36 @@ var house_centers: Array = []
 func _ready() -> void:
 	rng.seed = 20261122
 	_parse_args()
+	_load_settings()
+	if test_mode:
+		ally_count = 3
+		enemy_count = 4
+		ai_difficulty = 1
+		if override_allies >= 0:
+			ally_count = clampi(override_allies, 0, 8)
+		if override_enemies >= 0:
+			enemy_count = clampi(override_enemies, 1, 12)
+		if override_difficulty >= 0:
+			ai_difficulty = clampi(override_difficulty, 0, 2)
 	_setup_environment()
 	_build_world()
 	_spawn_player()
-	_spawn_bots()
 	_setup_hud()
 
 	if test_mode:
+		if test_menu:
+			if screenshot_path != "" and DisplayServer.get_name() != "headless":
+				_capture_menu_screenshot()
+			return
+		if menu_test:
+			await _run_menu_test()
+			return
+		_spawn_bots()
 		player.global_position = Vector3(0, 0, 19)
 		player.rotation.y = 0.0
 		player.pitch = -0.04
 		for b in bots:
 			b.fire_timer = 4.0
-		if test_menu:
-			if screenshot_path != "" and DisplayServer.get_name() != "headless":
-				_capture_menu_screenshot()
-			return
 		start_game(true)
 		await get_tree().process_frame
 		await get_tree().process_frame
@@ -59,6 +86,9 @@ func _ready() -> void:
 		if test_reload:
 			player.ammo = 10
 			get_tree().create_timer(1.0).timeout.connect(player._start_reload)
+		if ai_diag:
+			_print_ai_diag()
+			diag_timer = 4.0
 		if screenshot_path != "" and DisplayServer.get_name() != "headless":
 			_capture_screenshot()
 
@@ -79,6 +109,18 @@ func _parse_args() -> void:
 			test_fire = true
 		elif arg == "--reload":
 			test_reload = true
+		elif arg == "--aidiag":
+			ai_diag = true
+		elif arg == "--menutest":
+			menu_test = true
+		elif arg.begins_with("--allies="):
+			override_allies = int(arg.substr(arg.find("=") + 1))
+		elif arg.begins_with("--enemies="):
+			override_enemies = int(arg.substr(arg.find("=") + 1))
+		elif arg.begins_with("--difficulty="):
+			override_difficulty = int(arg.substr(arg.find("=") + 1))
+		elif arg.begins_with("--settings="):
+			settings_path = arg.substr(arg.find("=") + 1)
 
 
 func _setup_environment() -> void:
@@ -296,35 +338,152 @@ func _spawn_player() -> void:
 
 
 func _spawn_bots() -> void:
-	var blue_spawns := [Vector3(-4, 0, 27), Vector3(4, 0, 27), Vector3(0, 0, 25)]
-	var red_spawns := [Vector3(-5, 0, -27), Vector3(0, 0, -25), Vector3(5, 0, -27), Vector3(0, 0, -30)]
+	if bots_spawned:
+		return
+	bots_spawned = true
 
-	for i in range(blue_spawns.size()):
+	var blue_spawns := _make_spawn_points(Vector3(0, 0, 28), ally_count, 1.0)
+	var red_spawns := _make_spawn_points(Vector3(0, 0, -28), enemy_count, -1.0)
+
+	for i in range(ally_count):
 		var b = BOT_SCRIPT.new("blue", blue_spawns[i])
 		b.main = self
 		b.player = player
 		b.bot_name = "СОЮЗНИК-" + str(i + 1)
+		b.difficulty = ai_difficulty
+		b.ai_role = _role_for("blue", i)
+		b.slot = i
+		b.team_size = ally_count
 		add_child(b)
 		bots.append(b)
 
-	for i in range(red_spawns.size()):
+	for i in range(enemy_count):
 		var b = BOT_SCRIPT.new("red", red_spawns[i])
 		b.main = self
 		b.player = player
 		b.bot_name = "ПЕТУХ-" + str(i + 1)
+		b.difficulty = ai_difficulty
+		b.ai_role = _role_for("red", i)
+		b.slot = i
+		b.team_size = enemy_count
 		add_child(b)
 		bots.append(b)
 
 	if test_mode:
-		var test_positions := [
-			Vector3(-3, 0, -2), Vector3(3, 0, -1), Vector3(0, 0, -6),
-			Vector3(-4, 0, 4), Vector3(4, 0, 3), Vector3(0, 0, 8),
-			Vector3(-6, 0, 7)
-		]
-		for i in range(bots.size()):
-			bots[i].global_position = test_positions[i % test_positions.size()]
+		for i in range(ally_count):
+			var a_row := floori(float(i) / 4.0)
+			var a_col := i % 4
+			bots[i].global_position = Vector3(
+				(float(a_col) - 1.5) * 2.4, 0.0, 14.0 + float(a_row) * 2.6
+			)
 			bots[i].spawn_pos = bots[i].global_position
 			bots[i].fire_timer = 4.0
+		for i in range(enemy_count):
+			var e_row := floori(float(i) / 4.0)
+			var e_col := i % 4
+			var b = bots[ally_count + i]
+			b.global_position = Vector3(
+				(float(e_col) - 1.5) * 2.4, 0.0, -10.0 - float(e_row) * 2.6
+			)
+			b.spawn_pos = b.global_position
+			b.fire_timer = 4.0
+
+
+func _make_spawn_points(center: Vector3, count: int, z_sign: float) -> Array:
+	var points: Array = []
+	var cols := 4
+	for i in range(count):
+		var row := floori(float(i) / float(cols))
+		var col := i % cols
+		var x := (float(col) - (float(cols) - 1.0) * 0.5) * 2.6
+		var z := center.z + z_sign * float(row) * 2.5
+		points.append(Vector3(center.x + x, 0.0, z))
+	return points
+
+
+func _role_for(team_name: String, index: int) -> String:
+	if team_name == "blue":
+		if index == 0:
+			return "escort"
+		match index % 4:
+			2:
+				return "support"
+			3:
+				return "flank"
+			_:
+				return "assault"
+	match index % 4:
+		1:
+			return "support"
+		2:
+			return "flank"
+		_:
+			return "assault"
+
+
+func _load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(settings_path) != OK:
+		return
+	ally_count = clampi(int(cfg.get_value("match", "allies", ally_count)), 0, 8)
+	enemy_count = clampi(int(cfg.get_value("match", "enemies", enemy_count)), 1, 12)
+	ai_difficulty = clampi(int(cfg.get_value("match", "ai_difficulty", ai_difficulty)), 0, 2)
+
+
+func _save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("match", "allies", ally_count)
+	cfg.set_value("match", "enemies", enemy_count)
+	cfg.set_value("match", "ai_difficulty", ai_difficulty)
+	cfg.save(settings_path)
+
+
+func change_ally_count(delta: int) -> void:
+	ally_count = clampi(ally_count + delta, 0, 8)
+	_save_settings()
+	if hud != null:
+		hud.refresh_settings()
+
+
+func change_enemy_count(delta: int) -> void:
+	enemy_count = clampi(enemy_count + delta, 1, 12)
+	_save_settings()
+	if hud != null:
+		hud.refresh_settings()
+
+
+func cycle_difficulty() -> void:
+	ai_difficulty = (ai_difficulty + 1) % 3
+	_save_settings()
+	if hud != null:
+		hud.refresh_settings()
+
+
+func set_difficulty(value: int) -> void:
+	ai_difficulty = clampi(value, 0, 2)
+	_save_settings()
+	if hud != null:
+		hud.refresh_settings()
+
+
+func get_difficulty_name() -> String:
+	match ai_difficulty:
+		0:
+			return "ЛЁГКИЙ"
+		2:
+			return "СЛОЖНЫЙ"
+		_:
+			return "НОРМАЛЬНЫЙ"
+
+
+func get_team_alive(team_name: String) -> int:
+	var n := 0
+	if team_name == "blue" and player != null and player.alive:
+		n += 1
+	for b in bots:
+		if is_instance_valid(b) and b.alive and b.team == team_name:
+			n += 1
+	return n
 
 
 func _setup_hud() -> void:
@@ -334,9 +493,96 @@ func _setup_hud() -> void:
 	hud.setup(player)
 
 
+func _run_menu_test() -> void:
+	settings_path = "user://chickenwar_settings_test.cfg"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(settings_path))
+	ally_count = 3
+	enemy_count = 4
+	ai_difficulty = 1
+	hud.refresh_settings()
+	print("MENUTEST init allies=%d/%s enemies=%d/%s diff=%d/%s" % [
+		ally_count, hud.allies_value.text, enemy_count, hud.enemies_value.text,
+		ai_difficulty, get_difficulty_name()
+	])
+
+	hud.allies_plus_button.pressed.emit()
+	hud.enemies_minus_button.pressed.emit()
+	hud.difficulty_buttons[2].pressed.emit()
+	print("MENUTEST after clicks allies=%d/%s enemies=%d/%s diff=%d/%s" % [
+		ally_count, hud.allies_value.text, enemy_count, hud.enemies_value.text,
+		ai_difficulty, get_difficulty_name()
+	])
+
+	_save_settings()
+	var cfg := ConfigFile.new()
+	var reload_err := cfg.load(settings_path)
+	print("MENUTEST persisted load_err=%d allies=%d enemies=%d diff=%d" % [
+		reload_err, int(cfg.get_value("match", "allies", -1)),
+		int(cfg.get_value("match", "enemies", -1)),
+		int(cfg.get_value("match", "ai_difficulty", -1))
+	])
+
+	hud.play_button.pressed.emit()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var expected_bots := ally_count + enemy_count
+	print("MENUTEST play started=%s bots=%d/%d menu_visible=%s hud_visible=%s" % [
+		str(game_started), bots.size(), expected_bots,
+		str(hud.start_overlay.visible), str(hud.hud_root.visible)
+	])
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(settings_path))
+	var pass_ok: bool = (
+		game_started and bots.size() == expected_bots and not hud.start_overlay.visible
+		and hud.hud_root.visible and reload_err == OK
+		and int(cfg.get_value("match", "allies", -1)) == 4
+		and int(cfg.get_value("match", "enemies", -1)) == 3
+		and int(cfg.get_value("match", "ai_difficulty", -1)) == 2
+	)
+	print("MENUTEST RESULT ", "OK" if pass_ok else "FAIL")
+	get_tree().quit()
+
+
+func _print_ai_diag() -> void:
+	var parts: Array = []
+	for b in bots:
+		if not is_instance_valid(b):
+			continue
+		var tgt := "none"
+		if b.target != null and is_instance_valid(b.target):
+			tgt = "PLAYER" if b.target == player else str(b.target.bot_name)
+		var player_probe := ""
+		if player != null and b.team == "red":
+			var to_player: Vector3 = player.global_position - b.global_position
+			to_player.y = 0.0
+			var fov_dot := 1.0
+			if to_player.length() > 0.1:
+				fov_dot = b.forward_dir().dot(to_player.normalized())
+			player_probe = " player_los=%s fov_dot=%.2f" % [
+				str(b.has_los(player)), fov_dot
+			]
+		parts.append("%s/%s hp=%.0f %s shots=%d cover=%d tgt=%s vis=%s pos=(%.0f,%.0f)%s" % [
+			b.bot_name, b.ai_role, b.health, "ALIVE" if b.alive else "DEAD",
+			b.debug_shots, b.debug_cover_uses, tgt, str(b.target_visible),
+			b.global_position.x, b.global_position.z, player_probe
+		])
+	print("AIDIAG t=%.1f cap=%.0f blue=%d red=%d spawned=%d" % [
+		diag_elapsed, capture_progress, get_team_alive("blue"),
+		get_team_alive("red"), bots.size()
+	])
+	if player != null:
+		print("AIDIAG PLAYER hp=%.0f alive=%s pos=(%.1f,%.1f)" % [
+			player.health, str(player.alive), player.global_position.x,
+			player.global_position.z
+		])
+	for line in parts:
+		print("AIDIAG   ", line)
+
+
 func start_game(auto := false) -> void:
 	if game_started:
 		return
+	_spawn_bots()
 	game_started = true
 	paused = false
 	if player != null:
@@ -373,6 +619,11 @@ func end_game(victory: bool) -> void:
 		return
 	game_ended = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if ai_diag:
+		print("AIDIAG GAME END victory=%s kills=%d deaths=%d cap=%.0f" % [
+			str(victory), kills, deaths, capture_progress
+		])
+		_print_ai_diag()
 	if hud:
 		hud.show_end(victory, kills, deaths)
 
@@ -408,6 +659,12 @@ func _process(delta: float) -> void:
 		if debug_timer <= 0.0:
 			debug_timer = 1.0
 			print("DBG started=", game_started, " paused=", paused, " mouse=", Input.mouse_mode, " focus=", DisplayServer.window_is_focused())
+	if ai_diag and game_started:
+		diag_elapsed += delta
+		diag_timer -= delta
+		if diag_timer <= 0.0:
+			diag_timer = 4.0
+			_print_ai_diag()
 	if not game_started or paused or game_ended:
 		return
 	_update_capture(delta)
@@ -435,7 +692,7 @@ func _update_capture(delta: float) -> void:
 	elif red_in_zone > 0 and blue_in_zone == 0:
 		capture_progress = clamp(capture_progress - 7.0 * delta * (1.0 + 0.25 * (red_in_zone - 1)), -100.0, 100.0)
 
-	if abs(capture_progress) >= 100.0:
+	if abs(capture_progress) >= 100.0 and not ai_diag:
 		end_game(capture_progress > 0.0)
 
 

@@ -11,8 +11,11 @@ You play as an armed chicken fighting a squad of rival chickens for control of t
 - Procedural audio for gunshots, reloads, hitmarkers, distant bot fire, and grenade explosions
 - Hit-scan rifle with recoil, spread, tracers, muzzle flash, and headshots
 - Frag grenades with physics and area damage
-- AI chicken squads that patrol, shoot, and contest the capture point
-- Capture-point progress bar, kill/death stats, health, ammo, and hitmarker HUD
+- Material You–style main menu with large `PLAY` / `LEAVE` actions and a match-settings card
+- Match editor: 0–8 AI allies, 1–12 enemies, and three AI difficulty levels, saved automatically
+- AI chicken squads with FOV perception, target memory, reaction delay, aim settling, cover seeking, suppression, flanking, ally alerts, obstacle avoidance, and friendly-fire checks
+- Role-based AI (`assault`, `support`, `flank`, `escort`) that pushes, holds angles, and contests the capture point
+- Capture-point progress bar, kill/death stats, team-alive counters, health, ammo, and hitmarker HUD
 - Procedural low-poly map with buildings, trees, crates, and a central objective
 
 ## Controls
@@ -30,7 +33,7 @@ You play as an armed chicken fighting a squad of rival chickens for control of t
 | `G` | Throw grenade |
 | `Esc` | Pause / resume |
 
-The game starts from the main menu. Click or press `Enter` to capture the mouse and begin.
+The game starts from the main menu. Use the settings card to choose ally/enemy counts and AI difficulty, then press `PLAY`. Click or press `Enter` anywhere outside the card to start with the current settings. Match settings persist in `user://chickenwar_settings.cfg`.
 
 ## Running
 
@@ -44,9 +47,12 @@ The project also supports headless validation:
 godot --headless --path . --quit-after 120 -- --test
 ```
 
+Developer flags (after `--`): `--test`, `--menu`, `--aidiag`, `--menutest`, `--allies=N`, `--enemies=N`, `--difficulty=0..2`, `--screenshot=<path>`, `--ads`, `--fire`, `--reload`.
+
 ## Screenshots
 
 ![Main menu](screenshots/main_menu.png)
+![AI gameplay](screenshots/gameplay_ai.png)
 ![Hip fire](screenshots/hipfire.png)
 ![ADS](screenshots/ads.png)
 ![Firing](screenshots/firing.png)
